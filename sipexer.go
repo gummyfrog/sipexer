@@ -833,6 +833,12 @@ func SIPExerExit(ret int) {
 	}
 	SIPExerPrintf(SIPExerLogDebug, "return code: %d\n\n", nret)
 
+
+	// Testing for 302 Redirect.
+	if(ret == 302) {
+		nret = 0
+	}
+
 	os.Exit(nret)
 }
 
