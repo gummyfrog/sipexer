@@ -41,9 +41,10 @@ const sipexerVersion = "1.1.0"
 
 // exit, return and error code values
 const (
-	SIPExerRetOK   = 0
-	SIPExerRetDone = 1
-	SIPExerRetErr  = -1
+	SIPExerRetOK          = 0
+	SIPExerRetDone        = 1
+	SIPExerRetErr         = -1
+	SIPExerMatchedContact = 2
 
 	// errors
 	SIPExerErrTemplateRead        = -1000
@@ -89,6 +90,7 @@ const (
 	SIPExerErrWSSetReadTimeout    = -1164
 	SIPExerErrWSRead              = -1165
 	SIPExerErrRandomKey           = -1170
+	SIPExerMatchError             = -1180
 )
 
 var templateDefaultText string = `{{.method}} {{.ruri}} SIP/2.0
@@ -330,6 +332,7 @@ type CLIOptions struct {
 	dnssrvprint      bool
 	lateoffer        bool
 	version          bool
+	matchContact     string
 }
 
 var cliops = CLIOptions{
@@ -396,6 +399,7 @@ var cliops = CLIOptions{
 	lateoffer:        false,
 	helpcommands:     false,
 	version:          false,
+	matchContact:     "",
 }
 
 func sipexer_help_commands() {
@@ -593,6 +597,9 @@ func init() {
 	flag.BoolVar(&cliops.version, "version", cliops.version, "print version")
 	flag.BoolVar(&cliops.version, "v", cliops.version, "print version")
 
+	flag.StringVar(&cliops.matchContact, "match-contact", cliops.matchContact, "exits 0 if response has contact header containing this value")
+	flag.StringVar(&cliops.matchContact, "mc", cliops.matchContact, "exits 0 if response has contact header containing this value")
+
 	rand.Seed(time.Now().UnixNano())
 
 }
@@ -788,6 +795,7 @@ func main() {
 				tret = SIPExerRetDone
 				continue
 			}
+
 			SIPExerExit(SIPExerRetDone)
 		}
 
@@ -828,16 +836,19 @@ func SIPExerExit(ret int) {
 			nret = 3
 		}
 	}
+	// Testing for 302 Redirect.
+	if len(cliops.matchContact) != 0 && ret == SIPExerMatchedContact {
+		SIPExerPrintf(SIPExerLogDebug, "Found contact header containing %s\n", cliops.matchContact)
+		nret = 0
+	} else if len(cliops.matchContact) != 0 {
+		SIPExerPrintf(SIPExerLogDebug, "Could not find matching contact.\n")
+		nret = 1
+	}
+
 	if ret != nret {
 		SIPExerPrintf(SIPExerLogDebug, "initial return code: %d\n\n", ret)
 	}
 	SIPExerPrintf(SIPExerLogDebug, "return code: %d\n\n", nret)
-
-
-	// Testing for 302 Redirect.
-	if(ret == 302) {
-		nret = 0
-	}
 
 	os.Exit(nret)
 }
@@ -1639,6 +1650,23 @@ func SIPExerDialogLoop(tplstr string, tplfields map[string]interface{}, seDlg *S
 			SIPExerPrintf(SIPExerLogInfo, "response-received: from=%s bytes=%d data=[[---", seDlg.RecvAddr, seDlg.RecvN)
 			SIPExerMessagePrint("\n", string(seDlg.RecvBuf), "\n")
 			SIPExerPrintf(SIPExerLogInfo, "---]]\n")
+
+			if len(cliops.matchContact) != 0 {
+				var msgObj sgsip.SGSIPMessage = sgsip.SGSIPMessage{}
+				if sgsip.SGSIPParseMessage(string(seDlg.RecvBuf), &msgObj) != sgsip.SGSIPRetOK {
+					return SIPExerErrSIPMessageToString
+				}
+
+				// No guarantee that the contact header is the 5th, right?
+				for _, h := range msgObj.Headers {
+					if h.Name == "Contact" && strings.Contains(h.Body, cliops.matchContact) {
+						return SIPExerMatchedContact // 2
+					}
+				}
+
+				return SIPExerMatchError
+			}
+
 			if ret/100 == 1 {
 				// 1xx response - read again, but do not re-send UDP request
 				if seDlg.ProtoId == sgsip.ProtoUDP {
@@ -1728,6 +1756,7 @@ func SIPExerDialogLoop(tplstr string, tplfields map[string]interface{}, seDlg *S
 				}
 			}
 			if ret >= 300 {
+
 				if (ret == 401) || (ret == 407) {
 					if seDlg.SkipAuth {
 						return ret
@@ -1751,6 +1780,7 @@ func SIPExerDialogLoop(tplstr string, tplfields map[string]interface{}, seDlg *S
 					continue
 				}
 			}
+
 			return ret
 		}
 		break
@@ -1759,6 +1789,7 @@ func SIPExerDialogLoop(tplstr string, tplfields map[string]interface{}, seDlg *S
 	SIPExerPrintf(SIPExerLogInfo, "packet-received: from=%s bytes=%d data=[[---", seDlg.RecvAddr, seDlg.RecvN)
 	SIPExerMessagePrint("\n", string(seDlg.RecvBuf), "\n")
 	SIPExerPrintf(SIPExerLogInfo, "---]]\n")
+
 	return SIPExerRetOK
 }
 
